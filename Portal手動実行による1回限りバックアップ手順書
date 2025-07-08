@@ -1,0 +1,344 @@
+Portal手動実行による1回限りバックアップ手順書
+概要
+Azure Portal を使用して、VM の手動バックアップを1回だけ実行し、長期保存する手順です。
+60GBのテストファイルを作成してバックアップ時間を測定し、アプリケーション整合性バックアップを取得します。
+Unmanaged → Managed Disk変換も含めた完全な検証手順を提供します。
+
+前提条件：VM起動の重要性
+⚡ 必須事項：VMを起動してからバックアップ実行
+目的: アプリケーション整合性バックアップの取得
+品質: 最高レベル（Application Consistent）
+復元: 即座に使用可能な状態
+VM起動手順
+1. Azure Portal → 仮想マシン → restored-vm01
+2. 開始 をクリック
+3. 状態が「実行中」になるまで待機（3-5分）
+4. バックアップ実行
+💡 VM起動の効果:
+
+VSS（Volume Shadow Copy Service）が動作
+Azure VM Agentがアプリケーション整合性を確保
+復元時にディスクチェック不要
+データベースやアプリケーションが即座に利用可能
+
+
+Step 7: 元のポリシーに戻す（オプション）
+7.1 バックアップアイテムに移動
+vault608 → 保護されたアイテム → バックアップ アイテム → restored-vm01
+7.2 ポリシー変更
+バックアップ ポリシーの変更 をクリック
+7.3 元のポリシーを選択
+バックアップ ポリシー: DailyPolicy-mcj3we1f ← 元のポリシーに戻す
+保存 をクリック
+7.4 変更確認
+表示メッセージ:
+「バックアップ ポリシーが正常に変更されました。」
+
+確認項目:
+- バックアップ ポリシー: DailyPolicy-mcj3we1f
+- 定期バックアップ: 再開（毎日実行）
+- 保持期間: 元の設定に戻る
+⚠️ 元のポリシーに戻した場合の影響:
+
+定期バックアップが再開される
+毎日のバックアップコストが発生
+手動作成したRecovery Pointは保持される
+
+
+Step 1: 最小限のバックアップポリシー作成
+1.1 Recovery Services コンテナーに移動
+Azure Portal → Recovery Services コンテナー → vault608
+1.2 新規ポリシー作成
+vault608 → 設定 → バックアップ ポリシー → + 追加
+1.3 ポリシータイプ選択
+ワークロードの種類: Azure 仮想マシン
+ポリシーのサブタイプ: Standard（コスト削減のため）
+1.4 ポリシー詳細設定
+ポリシー名: ManualBackupPolicy-OneTime
+
+バックアップ スケジュール:
+  頻度: 毎週 ← 最小頻度
+  日: 日曜日
+  時間: 2:00
+  タイムゾーン: (UTC+09:00) 大阪、札幌、東京
+
+インスタント復元:
+  インスタント回復スナップショットの保有期間: 7日 ← 高速復元期間を延長
+
+保持期間の範囲:
+  毎日のバックアップ ポイントの保有期間: 構成されていません
+  
+  毎週のバックアップ ポイントの保有期間: 
+    オン: ✓
+    日曜日
+    タイミング: 2:00
+    対象: 26週 ← 検証・移行期間（約6ヶ月）
+  
+  毎月のバックアップ ポイントの保有期間: 構成されていません
+  毎年のバックアップ ポイントの保有期間: 構成されていません
+
+階層化を有効にする: □ ← チェックを外す（一時的用途のため不要）
+
+整合性の種類:
+  表示されない場合: Standard ポリシーの仕様（自動で最適な整合性レベルを選択）
+  
+**📝 整合性レベルの自動選択:**
+- VM起動中: アプリケーション整合性（最高品質）
+- VM停止中: クラッシュ整合性
+
+Azure Backup リソースグループ (省略可能):
+  名前: [空欄のまま] ← 既存リソースグループに復元するため不要
+  サフィックス: [空欄のまま] ← 設定不要
+1.5 ポリシー作成完了
+作成 をクリック
+📝 補足事項:
+Azure Backup リソースグループ設定が表示された場合:
+- 名前: [空欄のまま]
+- サフィックス: [空欄のまま]
+- 理由: 既存リソースグループに復元するため設定不要
+
+Step 2: VMにポリシーを適用
+2.1 バックアップアイテムに移動
+vault608 → 保護されたアイテム → バックアップ アイテム → Azure Virtual Machine
+2.2 VMを選択
+restored-vm01 をクリック
+2.3 ポリシー変更
+バックアップ ポリシーの変更 をクリック
+2.4 新しいポリシーを選択
+バックアップ ポリシー: ManualBackupPolicy-OneTime ← 作成したポリシーを選択
+保存 をクリック
+💡 ポリシー選択のポイント:
+ドロップダウンに表示される項目:
+- DailyPolicy-mcj3we1f（既存のポリシー）
+- ManualBackupPolicy-OneTime（新規作成したポリシー）← これを選択
+- DefaultPolicy（デフォルトポリシー）
+⚠️ 警告表示の対処:
+「バックアップ ポリシーに対する変更の結果として復元ポイントが削除される場合があります」
+→ OK をクリック（検証環境なので問題なし）
+
+Step 3: 手動バックアップの実行
+3.0 VM起動状態の確認（重要）
+前提条件: VMが「実行中」状態であることを確認
+
+確認方法:
+1. Azure Portal → 仮想マシン → restored-vm01
+2. 状態: 実行中 ← この表示を確認
+3. 停止中の場合: 開始 をクリックして起動
+4. 完全起動まで3-5分待機
+3.0 VM起動状態の確認（重要）
+前提条件: VMが「実行中」状態であることを確認
+
+確認方法:
+1. Azure Portal → 仮想マシン → restored-vm01
+2. 状態: 実行中 ← この表示を確認
+3. 停止中の場合: 開始 をクリックして起動
+4. 完全起動まで3-5分待機
+3.1 60GBテストファイル作成（バックアップ時間測定用）
+目的: バックアップ変換時間を測定するため、Cドライブに60GBのファイルを作成
+3.1.1 RDP接続
+接続先: VMのパブリックIP
+ユーザー名: azureuser
+パスワード: YourStrongPassword123!
+3.1.2 PowerShell管理者として実行
+1. スタートメニュー → Windows PowerShell
+2. 右クリック → "管理者として実行"
+3. UAC確認 → "はい"
+3.1.3 ディスク容量確認（作成前）
+powershellGet-WmiObject -Class Win32_LogicalDisk | Where-Object {$_.DeviceID -eq "C:"} | Select-Object DeviceID, @{Name="Size(GB)";Expression={[math]::Round($_.Size/1GB,2)}}, @{Name="FreeSpace(GB)";Expression={[math]::Round($_.FreeSpace/1GB,2)}}, @{Name="Used(GB)";Expression={[math]::Round(($_.Size-$_.FreeSpace)/1GB,2)}}
+期待される出力例:
+DeviceID Size(GB) FreeSpace(GB) Used(GB)
+-------- -------- ------------- --------
+C:         126.51        113.59    12.92
+3.1.4 管理者権限確認
+powershellif (([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { Write-Host "管理者権限あり" -ForegroundColor Green } else { Write-Host "通常ユーザー権限" -ForegroundColor Yellow }
+期待される出力:
+管理者権限あり
+3.1.5 60GBファイル作成実行
+powershellfsutil file createnew C:\testfile_60gb.dat 64424509440
+期待される出力:
+File C:\testfile_60gb.dat is created
+3.1.6 作成確認
+powershellGet-Item C:\testfile_60gb.dat | Select-Object Name, @{Name="Size(GB)";Expression={[math]::Round($_.Length/1GB,2)}}
+期待される出力:
+Name              Size(GB)
+----              --------
+testfile_60gb.dat    60
+3.1.7 ディスク容量確認（作成後）
+powershellGet-WmiObject -Class Win32_LogicalDisk | Where-Object {$_.DeviceID -eq "C:"} | Select-Object DeviceID, @{Name="Size(GB)";Expression={[math]::Round($_.Size/1GB,2)}}, @{Name="FreeSpace(GB)";Expression={[math]::Round($_.FreeSpace/1GB,2)}}, @{Name="Used(GB)";Expression={[math]::Round(($_.Size-$_.FreeSpace)/1GB,2)}}
+期待される結果:
+
+Used(GB)が約60GB増加
+FreeSpace(GB)が約60GB減少
+
+
+Step 3A: Managed Diskへの変換（オプション）
+3A.1 変換前の準備
+目的: より高性能なAzure Backupの利用
+前提: 60GBテストファイル作成済み
+安全性: 元のVHDファイルは削除されない（ロールバック可能）
+3A.2 VM停止（必須）
+bash# VM停止
+az vm deallocate --resource-group rg-unmanaged-test --name restored-vm01
+
+# 停止確認
+az vm show --resource-group rg-unmanaged-test --name restored-vm01 --query "powerState" --output tsv
+# 期待される出力: VM deallocated
+3A.3 Managed Diskに変換
+bash# 変換実行
+az vm convert --resource-group rg-unmanaged-test --name restored-vm01
+
+# 変換進行状況確認
+az vm show --resource-group rg-unmanaged-test --name restored-vm01 --query "storageProfile.osDisk.managedDisk.id" --output tsv
+⏱️ 変換時間の実測値:
+データサイズ: 約130GB（基本VM 70GB + 60GBファイル）
+変換時間: 1時間20分
+方式: コピー作成（元VHDファイル保持）
+3A.4 変換完了処理
+bash# VM起動（変換完了のため必須）
+az vm start --resource-group rg-unmanaged-test --name restored-vm01
+
+# 起動確認
+az vm show --resource-group rg-unmanaged-test --name restored-vm01 --query "powerState" --output tsv
+# 期待される出力: VM running
+3A.5 データ整合性確認
+1. RDP接続でVMにアクセス
+2. Cドライブ容量確認
+3. testfile_60gb.dat の存在確認
+4. 60GBファイルが正常に移行されていることを確認
+⚠️ 重要：一時ディスク（Dドライブ）について
+正常動作: 一時ディスク（Temporary Storage D:）は初期化される
+理由: VM再起動時に一時ディスクは常に初期化される
+影響: なし（一時ディスクにデータは保存していない）
+確認要: Cドライブのデータ（60GBファイル）のみ確認
+💾 ディスク確認コマンド（PowerShell）:
+powershell# Cドライブ容量確認
+Get-WmiObject -Class Win32_LogicalDisk | Where-Object {$_.DeviceID -eq "C:"} | Select-Object DeviceID, @{Name="Size(GB)";Expression={[math]::Round($_.Size/1GB,2)}}, @{Name="FreeSpace(GB)";Expression={[math]::Round($_.FreeSpace/1GB,2)}}, @{Name="Used(GB)";Expression={[math]::Round(($_.Size-$_.FreeSpace)/1GB,2)}}
+
+# 60GBファイル確認
+Get-Item C:\testfile_60gb.dat | Select-Object Name, @{Name="Size(GB)";Expression={[math]::Round($_.Length/1GB,2)}}
+
+# 一時ディスク確認（参考）
+Get-WmiObject -Class Win32_LogicalDisk | Where-Object {$_.DeviceID -eq "D:"} | Select-Object DeviceID, @{Name="Size(GB)";Expression={[math]::Round($_.Size/1GB,2)}}, @{Name="FreeSpace(GB)";Expression={[math]::Round($_.FreeSpace/1GB,2)}}
+3A.6 Managed Disk設定確認
+bash# Managed Disk移行確認
+az vm show --resource-group rg-unmanaged-test --name restored-vm01 --query "storageProfile.osDisk" --output json
+
+# 期待される出力例:
+{
+  "managedDisk": {
+    "id": "/subscriptions/.../disks/restored-vm01_OsDisk_xxx"
+  },
+  "name": "restored-vm01_OsDisk_xxx",
+  "osType": "Windows",
+  "vhd": null  ← null になっていればManaged Disk
+}
+
+restored-vm01 → 今すぐバックアップ をクリック
+3.3 バックアップの保持期間設定
+バックアップの保持期間: カスタム
+
+カスタム日付選択:
+  推奨: 2025年12月30日（6ヶ月後）
+  最大: 2026年6月30日（1年後）
+3.4 バックアップ実行
+バックアップ をクリック
+3.5 実行確認
+表示メッセージ:
+「バックアップが正常にトリガーされました。進行状況を監視するには、[バックアップ ジョブ] ページをご覧ください。」
+
+Step 4: バックアップ進行状況の確認
+4.1 バックアップジョブ確認
+vault608 → 監視 → バックアップ ジョブ
+4.2 進行状況監視
+確認項目:
+  ジョブの種類: バックアップ
+  状態: 進行中 → 完了
+  整合性: Application Consistent（VM起動中の場合）
+  開始時刻: [実行時刻]
+  予想期間: 60分～3時間（60GBファイル追加により延長）
+⏱️ バックアップ時間の目安:
+基本VM（約70GB）: 30分～2時間
+60GBファイル追加後: 60分～3時間
+データ転送: 60GB分の時間が追加される
+4.3 完了待機
+状態が「完了」になるまで待機
+エラーが発生した場合は詳細を確認
+
+Step 5: スケジュール停止（重要）
+5.1 バックアップアイテムに戻る
+vault608 → 保護されたアイテム → バックアップ アイテム → restored-vm01
+5.2 バックアップ停止
+バックアップの停止 をクリック
+5.3 データ保持の選択
+🔘 バックアップ データの保持 ← これを選択
+○ バックアップ データの削除
+
+理由の選択: その他
+コメント: 手動バックアップのみ実行のため停止
+5.4 停止実行
+バックアップの停止 をクリック
+5.5 停止確認
+表示メッセージ:
+「バックアップ ポリシーが無効になりました。バックアップ データは保持されています。」
+
+Step 6: 結果確認
+6.1 復元ポイント確認
+vault608 → 保護されたアイテム → バックアップ アイテム → restored-vm01
+→ 復元ポイントの表示
+6.2 バックアップ品質確認
+復元ポイント一覧で確認項目:
+  作成日時: [手動実行時刻]
+  種類: オンデマンド
+  整合性: Application Consistent ← 最高品質を確認
+  保持期限: 2025年12月30日（設定した日付）
+  状態: アクティブ
+🎯 品質確認のポイント:
+✅ Application Consistent: アプリケーション整合性（最高品質）
+⚠️ File System Consistent: ファイルシステム整合性（中品質）
+❌ Crash Consistent: クラッシュ整合性（低品質）
+
+完了後の状態（元のポリシーに戻した場合）
+✅ 最終的な設定
+
+バックアップデータ: 手動実行分は6ヶ月間保存
+定期実行: 再開済み（元のポリシーで毎日実行）
+バックアップコスト: 通常の定期バックアップ料金が発生
+復元: 手動・定期両方のRecovery Pointから可能
+
+📋 作業完了チェックリスト
+
+ ポリシー作成完了
+ VMにポリシー適用完了
+ VM起動状態確認完了
+ RDP接続確認完了
+ 60GBテストファイル作成完了
+ Unmanagedディスクでのバックアップ検証完了
+ Managed Disk変換完了（1時間20分）
+ 変換後のデータ整合性確認完了
+ 一時ディスク正常初期化確認完了
+ 検証目的達成
+
+
+注意事項
+⚠️ 重要なポイント:
+
+VM起動必須: アプリケーション整合性バックアップのため必ずVM起動
+元のポリシーに戻すと定期バックアップが再開される
+手動作成したRecovery Pointは保持期限まで自動削除されない
+復元時は「新規作成」または「既存を置換」を選択可能
+unmanagedディスクでは一部機能に制限あり
+Azure Backup リソースグループは既存RGに復元する場合は空欄でよい
+
+💰 コスト管理:
+
+検証完了: バックアップ検証目的達成
+60GBファイル: 検証用途完了（削除してコスト削減可能）
+Managed Disk: 高性能・高可用性を実現
+元VHDファイル: ロールバック用として保持（削除してコスト削減可能）
+VM停止: 検証完了後は停止してコスト削減推奨
+
+🔧 クリーンアップ推奨事項:
+1. 60GBテストファイル削除: fsutil file createnew で作成 → 手動削除
+2. 元VHDファイル削除: ロールバック不要なら削除
+3. VM停止: 検証完了後は停止して課金停止
+4. 不要リソース削除: 検証用リソースのクリーンアップ
