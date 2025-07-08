@@ -1,0 +1,179 @@
+# アンマネージドディスク VHD切り替え + タグ管理スクリプト（完全版）
+#
+# ====================================================================
+# RDP接続情報
+# ====================================================================
+# VM接続用認証情報:
+#   ユーザー名: azureuser
+#   パスワード: YourStrongPassword123!
+#   ポート: 3389 (デフォルト)
+#
+# 接続方法:
+#   Azure Portal → 仮想マシン → 対象VM → 接続 → RDP
+#   または 直接RDP: [VMのパブリックIP]:3389
+#
+# ====================================================================
+# Azure 仕様制限について
+# ====================================================================
+# 1. OSディスク名変更: 不可能 (Azure仕様)
+#    エラー: "Changing property 'osDisk.name' is not allowed."
+#    参考: https://learn.microsoft.com/en-us/azure/virtual-machines/faq-for-disks
+#
+# 2. 変更可能な項目:
+#    ✅ VHD URI (アンマネージドディスクのみ)
+#    ✅ VMタグ (管理情報の追加)
+#    ✅ データディスク
+#
+# 3. 変更不可能な項目:
+#    ❌ OSディスク名 (Managed/Unmanaged両方)
+#    ❌ アタッチ済みディスクの名前
+#    ❌ OSディスクサイズの縮小
+#
+# ====================================================================
+# 代替ソリューション: タグ機能での管理
+# ====================================================================
+# ディスク名変更の代わりに、VMタグで管理情報を記録します
+# - 復元履歴
+# - バックアップ元情報  
+# - 変更日時
+# - 用途・説明
+#
+# ====================================================================
+
+# 設定値 - 実際の値に変更してください
+$ResourceGroupName = "rg-unmanaged-test"
+$VMName = "restored-vm01-20250705"
+$NewVhdUri = "https://storagevm1751288077.blob.core.windows.net/vhds/osdisk_8bc5bfcfbe.vhd"
+
+# タグ設定 - 必要に応じて変更してください
+$BackupDescription = "Restored from backup osdisk_8bc5bfcfbe.vhd"
+$BackupSource = "osdisk_8bc5bfcfbe.vhd"
+$ChangeReason = "System restore from backup"
+
+Write-Output "=== アンマネージドディスク VHD切り替え + タグ管理 ==="
+Write-Output "対象VM: $VMName"
+Write-Output "新しいVHD: $NewVhdUri"
+Write-Output ""
+
+# 1. VM設定取得
+Write-Output "1. VM設定を取得中..."
+$vm = Get-AzVM -ResourceGroupName $ResourceGroupName -Name $VMName
+
+# 現在の設定確認
+$currentVhdUri = $vm.StorageProfile.OsDisk.Vhd.Uri
+$currentDiskName = $vm.StorageProfile.OsDisk.Name
+
+Write-Output "現在のVHD URI: $currentVhdUri"
+Write-Output "現在のディスク名: $currentDiskName"
+Write-Output ""
+
+# 2. VM停止
+Write-Output "2. VMを停止中..."
+Stop-AzVM -ResourceGroupName $ResourceGroupName -Name $VMName -Force
+Write-Output "✅ VM停止完了"
+Write-Output ""
+
+# 3. VHD URI変更
+Write-Output "3. VHD URIを変更中..."
+$vm.StorageProfile.OsDisk.Vhd.Uri = $NewVhdUri
+Write-Output "✅ VHD URI変更完了"
+Write-Output ""
+
+# 4. タグ情報追加/更新
+Write-Output "4. 管理タグを追加中..."
+
+# 既存タグの保持（存在する場合）
+if (-not $vm.Tags) {
+    $vm.Tags = @{}
+}
+
+# バックアップ関連タグの追加
+$vm.Tags["OSdisk-Status"] = "Restored"
+$vm.Tags["OSdisk-Description"] = $BackupDescription
+$vm.Tags["OSdisk-Source-VHD"] = $BackupSource
+$vm.Tags["OSdisk-Restored-Date"] = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+$vm.Tags["OSdisk-Change-Reason"] = $ChangeReason
+$vm.Tags["OSdisk-Original-Name"] = $currentDiskName
+
+Write-Output "✅ 以下のタグを追加しました:"
+Write-Output "  - OSdisk-Status: Restored"
+Write-Output "  - OSdisk-Description: $BackupDescription"
+Write-Output "  - OSdisk-Source-VHD: $BackupSource"
+Write-Output "  - OSdisk-Restored-Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+Write-Output "  - OSdisk-Change-Reason: $ChangeReason"
+Write-Output "  - OSdisk-Original-Name: $currentDiskName"
+Write-Output ""
+
+# 5. VM設定更新
+Write-Output "5. VM設定を更新中..."
+$result = Update-AzVM -ResourceGroupName $ResourceGroupName -VM $vm
+
+if ($result.IsSuccessStatusCode) {
+    Write-Output "✅ VM設定更新成功"
+} else {
+    Write-Output "❌ VM設定更新失敗"
+    exit 1
+}
+Write-Output ""
+
+# 6. VM起動
+Write-Output "6. VMを起動中..."
+Start-AzVM -ResourceGroupName $ResourceGroupName -Name $VMName
+Write-Output "✅ VM起動完了"
+Write-Output ""
+
+# 7. 結果確認
+Write-Output "7. 変更結果確認..."
+$updatedVm = Get-AzVM -ResourceGroupName $ResourceGroupName -Name $VMName
+
+Write-Output "=== 変更結果サマリー ==="
+Write-Output "VHD URI変更:"
+Write-Output "  変更前: $currentVhdUri"
+Write-Output "  変更後: $($updatedVm.StorageProfile.OsDisk.Vhd.Uri)"
+Write-Output ""
+Write-Output "ディスク名 (変更不可):"
+Write-Output "  名前: $($updatedVm.StorageProfile.OsDisk.Name)"
+Write-Output "  注意: Azure仕様によりOSディスク名は変更できません"
+Write-Output ""
+Write-Output "追加されたタグ:"
+foreach ($tag in $updatedVm.Tags.GetEnumerator() | Where-Object {$_.Key -like "OSdisk-*"}) {
+    Write-Output "  $($tag.Key): $($tag.Value)"
+}
+Write-Output ""
+Write-Output "✅ VHD切り替えとタグ管理が完了しました"
+
+# ====================================================================
+# 補足情報
+# ====================================================================
+# 
+# Azure Portal でのタグ確認方法:
+# 1. Azure Portal → 仮想マシン → 対象VM → タグ
+# 2. 「OSdisk-」で始まるタグを確認
+#
+# Azure CLI でのタグ確認:
+# az vm show --resource-group $ResourceGroupName --name $VMName --query tags
+#
+# PowerShell でのタグ確認:
+# $vm = Get-AzVM -ResourceGroupName $ResourceGroupName -Name $VMName
+# $vm.Tags | Where-Object {$_.Keys -like "OSdisk-*"}
+#
+# ====================================================================
+# 今後の設計指針
+# ====================================================================
+#
+# 1. 新規VM作成時:
+#    - 事前に適切なディスク名を設計
+#    - 組織的な命名規則の策定
+#    - タグ戦略の事前計画
+#
+# 2. 既存VM管理時:
+#    - ディスク名変更は不可能として受容
+#    - タグ機能での情報管理
+#    - 外部ドキュメントでの補完
+#
+# 3. バックアップ・復元時:
+#    - 復元履歴のタグ記録
+#    - 変更理由の明確化
+#    - 承認プロセスの文書化
+#
+# ====================================================================
