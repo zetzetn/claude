@@ -1,0 +1,160 @@
+#!/bin/bash
+
+# Windows Server 2016 Unmanaged VM 作成スクリプト
+# 最終更新: 2025/06/30 - ストレージアカウント名24文字制限対応
+
+# 変数設定
+RESOURCE_GROUP="rg-unmanaged-test"
+LOCATION="japaneast"
+VM_NAME="restored-vm01"
+STORAGE_ACCOUNT_PREFIX="storagevm"
+ADMIN_USERNAME="azureuser"
+ADMIN_PASSWORD="YourStrongPassword123!"
+VNET_NAME="vnet-unmanaged"
+SUBNET_NAME="default"
+NSG_NAME="nsg-unmanaged"
+NIC_NAME="nic-restored-vm01"
+PUBLIC_IP_NAME="pip-restored-vm01"
+VM_SIZE="Standard_DS1_v2"
+
+# ユニークなストレージアカウント名生成
+STORAGE_ACCOUNT="${STORAGE_ACCOUNT_PREFIX}$(date +%s)"
+
+echo "=== Windows Server 2016 Unmanaged VM 作成開始 ==="
+echo "開始時刻: $(date)"
+
+# リソースグループ作成
+echo "1. リソースグループ作成中..."
+az group create \
+  --name $RESOURCE_GROUP \
+  --location $LOCATION
+
+# ストレージアカウント作成
+echo "2. ストレージアカウント作成中..."
+az storage account create \
+  --resource-group $RESOURCE_GROUP \
+  --name $STORAGE_ACCOUNT \
+  --location $LOCATION \
+  --sku Standard_LRS \
+  --kind StorageV2
+
+# ネットワーク作成
+echo "3. ネットワーク設定中..."
+az network vnet create \
+  --resource-group $RESOURCE_GROUP \
+  --name $VNET_NAME \
+  --address-prefix 10.0.0.0/16 \
+  --subnet-name $SUBNET_NAME \
+  --subnet-prefix 10.0.0.0/24
+
+az network nsg create \
+  --resource-group $RESOURCE_GROUP \
+  --name $NSG_NAME
+
+az network nsg rule create \
+  --resource-group $RESOURCE_GROUP \
+  --nsg-name $NSG_NAME \
+  --name AllowRDP \
+  --protocol tcp \
+  --priority 1000 \
+  --destination-port-range 3389 \
+  --access allow
+
+az network public-ip create \
+  --resource-group $RESOURCE_GROUP \
+  --name $PUBLIC_IP_NAME \
+  --allocation-method static
+
+az network nic create \
+  --resource-group $RESOURCE_GROUP \
+  --name $NIC_NAME \
+  --vnet-name $VNET_NAME \
+  --subnet $SUBNET_NAME \
+  --public-ip-address $PUBLIC_IP_NAME \
+  --network-security-group $NSG_NAME
+
+# VM作成
+echo "4. VM作成中..."
+az vm create \
+  --resource-group $RESOURCE_GROUP \
+  --name $VM_NAME \
+  --image MicrosoftWindowsServer:WindowsServer:2016-Datacenter:14393.7973.250409 \
+  --size $VM_SIZE \
+  --storage-account $STORAGE_ACCOUNT \
+  --use-unmanaged-disk \
+  --admin-username $ADMIN_USERNAME \
+  --admin-password $ADMIN_PASSWORD \
+  --location $LOCATION \
+  --nics $NIC_NAME
+
+# 結果確認
+echo "5. 作成結果確認中..."
+PUBLIC_IP=$(az network public-ip show \
+  --resource-group $RESOURCE_GROUP \
+  --name $PUBLIC_IP_NAME \
+  --query ipAddress -o tsv)
+
+echo ""
+echo "=== 作成完了 ==="
+echo "完了時刻: $(date)"
+echo ""
+echo "=== 接続情報 ==="
+echo "VM名: $VM_NAME"
+echo "パブリックIP: $PUBLIC_IP"
+echo "ユーザー名: $ADMIN_USERNAME"
+echo "パスワード: $ADMIN_PASSWORD"
+echo "ストレージアカウント: $STORAGE_ACCOUNT"
+echo ""
+
+# VM詳細表示
+az vm show \
+  --resource-group $RESOURCE_GROUP \
+  --name $VM_NAME \
+  --show-details \
+  --query "{Name:name, PowerState:powerState, PublicIP:publicIps, PrivateIP:privateIps, VMSize:hardwareProfile.vmSize}" \
+  --output table
+
+# VHDファイル確認
+echo ""
+echo "=== VHDファイル確認 ==="
+STORAGE_KEY=$(az storage account keys list \
+  --resource-group $RESOURCE_GROUP \
+  --account-name $STORAGE_ACCOUNT \
+  --query "[0].value" -o tsv)
+
+az storage blob list \
+  --account-name $STORAGE_ACCOUNT \
+  --container-name vhds \
+  --account-key $STORAGE_KEY \
+  --query "[].{Name:name, Size:properties.contentLength, LastModified:properties.lastModified}" \
+  --output table
+
+# ========================================
+# 現在のパラメータ表（最終更新: 2025/06/30 - ストレージアカウント名修正）
+# ========================================
+
+echo ""
+echo "=== 設定パラメータ一覧 ==="
+cat << EOF
++------------------------+----------------------------------------+
+| パラメータ              | 値                                     |
++------------------------+----------------------------------------+
+| リソースグループ        | rg-unmanaged-test                      |
+| ロケーション            | japaneast                              |
+| VM名                   | restored-vm01                          |
+| OSイメージ             | Windows Server 2016 Datacenter        |
+| イメージバージョン      | 14393.7973.250409                      |
+| VMサイズ               | Standard_DS1_v2                        |
+| ディスクタイプ          | Unmanaged (VHD)                        |
+| ストレージアカウント    | storagevm[timestamp]                   |
+| ストレージSKU          | Standard_LRS                           |
+| 管理者ユーザー名        | azureuser                              |
+| 管理者パスワード        | YourStrongPassword123!                 |
+| 仮想ネットワーク        | vnet-unmanaged (10.0.0.0/16)          |
+| サブネット             | default (10.0.0.0/24)                 |
+| セキュリティグループ    | nsg-unmanaged                          |
+| ネットワークIF         | nic-restored-vm01                      |
+| パブリックIP           | pip-restored-vm01 (Static)             |
+| 許可ポート             | 3389 (RDP)                             |
++------------------------+----------------------------------------+
+EOF
