@@ -170,14 +170,14 @@ try {
       --name $VM_NAME `
       --image MicrosoftWindowsServer:WindowsServer:2016-Datacenter:14393.7973.250409 `
       --size $VM_SIZE `
-      --storage-account $OS_STORAGE_ACCOUNT ` # OSディスクのストレージアカウント
-      --use-unmanaged-disk ` # Unmanaged Disk を使用することを指定
+      --storage-account $OS_STORAGE_ACCOUNT `
+      --use-unmanaged-disk ` 
       --admin-username $ADMIN_USERNAME `
       --admin-password $ADMIN_PASSWORD `
       --location $LOCATION `
       --nics $NIC_NAME `
-      --attach-data-disks $DATA_DISK_SIZE_GB ` # 新しいデータディスクを作成 (容量指定)
-      --data-disk-storage-account $DATA_STORAGE_ACCOUNT # データディスクのストレージアカウントを指定
+      --attach-data-disks $DATA_DISK_SIZE_GB `
+      --data-disk-storage-account $DATA_STORAGE_ACCOUNT
     Write-Host "VM '$VM_NAME' が正常に作成されました。"
 } catch {
     Write-Error "VMの作成中にエラーが発生しました: $($_.Exception.Message)"
